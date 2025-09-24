@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Buddhist RAG - Explore Dharma Wisdom</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="header-content">
+                <div class="logo-section">
+                    <div class="logo">🙏</div>
+                    <h1>Buddhist RAG</h1>
+                    <span class="subtitle">Explore Dharma Wisdom</span>
+                </div>
+                <div class="status-section">
+                    <div id="status-indicator" class="status-indicator">
+                        <span class="status-dot" id="status-dot"></span>
+                        <span id="status-text">Initializing...</span>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Sidebar -->
+            <aside class="sidebar">
+                <div class="sidebar-section">
+                    <h3>📚 Library</h3>
+                    <div class="upload-area" id="upload-area">
+                        <div class="upload-content">
+                            <div class="upload-icon">📄</div>
+                            <p>Drop PDF files here or</p>
+                            <button class="upload-btn" id="upload-btn">Choose Files</button>
+                        </div>
+                    </div>
+
+                    <div class="document-list" id="document-list">
+                        <div class="loading-placeholder" id="documents-loading">
+                            <div class="spinner"></div>
+                            <p>Loading documents...</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="sidebar-section">
+                    <h3>📊 Statistics</h3>
+                    <div class="stats-grid" id="stats-grid">
+                        <div class="stat-item">
+                            <div class="stat-number" id="total-documents">-</div>
+                            <div class="stat-label">Documents</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-number" id="total-chunks">-</div>
+                            <div class="stat-label">Text Chunks</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-number" id="total-queries">0</div>
+                            <div class="stat-label">Queries</div>
+                        </div>
+                    </div>
+                </div>
+            </aside>
+
+            <!-- Chat Area -->
+            <section class="chat-section">
+                <div class="chat-container">
+                    <div class="chat-messages" id="chat-messages">
+                        <div class="welcome-message">
+                            <div class="welcome-content">
+                                <h2>Welcome to Buddhist RAG</h2>
+                                <p>Ask questions about your Buddhist texts and I'll provide thoughtful answers with source citations.</p>
+
+                                <div class="example-questions">
+                                    <h4>Try asking:</h4>
+                                    <div class="question-examples">
+                                        <button class="example-question" data-question="What is the nature of suffering according to Buddhist teachings?">
+                                            What is the nature of suffering?
+                                        </button>
+                                        <button class="example-question" data-question="How does Buddhist meditation cultivate mindfulness and awareness?">
+                                            How does meditation cultivate mindfulness?
+                                        </button>
+                                        <button class="example-question" data-question="What are the key teachings about compassion in Buddhist texts?">
+                                            What are the teachings about compassion?
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div class="getting-started" id="getting-started">
+                                    <p><strong>Getting Started:</strong></p>
+                                    <ol>
+                                        <li>Upload Buddhist PDF texts using the library section</li>
+                                        <li>Wait for processing to complete</li>
+                                        <li>Ask questions about the teachings</li>
+                                        <li>Explore source citations to deepen your understanding</li>
+                                    </ol>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="chat-input-container">
+                        <div class="chat-input-wrapper">
+                            <textarea
+                                id="chat-input"
+                                placeholder="Ask a question about Buddhist teachings..."
+                                rows="1"
+                                disabled
+                            ></textarea>
+                            <button id="send-button" class="send-button" disabled>
+                                <span class="send-icon">→</span>
+                            </button>
+                        </div>
+                        <div class="input-footer">
+                            <span class="model-info" id="model-info">Powered by Qwen 2.5 7B</span>
+                            <span class="shortcut-hint">Press Enter to send, Shift+Enter for new line</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Modal for document details -->
+        <div id="document-modal" class="modal">
+            <div class="modal-content">
+                <span class="close" id="modal-close">&times;</span>
+                <div class="modal-header">
+                    <h2 id="modal-title">Document Details</h2>
+                </div>
+                <div class="modal-body" id="modal-body">
+                    <!-- Content will be populated by JavaScript -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Loading overlay -->
+        <div id="loading-overlay" class="loading-overlay" style="display: none;">
+            <div class="loading-content">
+                <div class="spinner large"></div>
+                <h3 id="loading-title">Processing...</h3>
+                <p id="loading-message">This may take a few moments.</p>
+            </div>
+        </div>
+
+        <!-- Toast notifications -->
+        <div id="toast-container" class="toast-container"></div>
+    </div>
+
+    <script src="renderer.js"></script>
+</body>
+</html>
