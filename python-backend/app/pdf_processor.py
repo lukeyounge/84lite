@@ -5,21 +5,26 @@ from pathlib import Path
 from loguru import logger
 import hashlib
 from datetime import datetime
+from .buddhist_anchors import BuddhistAnchorExtractor
 
 class BuddhistTextChunk:
     def __init__(self, content: str, page_num: int, chunk_id: str,
                  source_file: str, chunk_type: str = "paragraph",
-                 metadata: Dict = None):
+                 metadata: Dict = None, anchors: List = None,
+                 cross_links: Dict = None):
         self.content = content.strip()
         self.page_num = page_num
         self.chunk_id = chunk_id
         self.source_file = source_file
         self.chunk_type = chunk_type
         self.metadata = metadata or {}
+        self.anchors = anchors or []
+        self.cross_links = cross_links or {}
         self.word_count = len(content.split())
 
 class PDFProcessor:
     def __init__(self):
+        self.anchor_extractor = BuddhistAnchorExtractor()
         self.buddhist_section_patterns = [
             r"^\d+\.\s+",  # Numbered sections (1. 2. 3.)
             r"^Chapter\s+\d+",  # Chapters
@@ -75,6 +80,11 @@ class PDFProcessor:
 
             doc.close()
 
+            # Extract glossary from the full document text
+            document_id = Path(pdf_path).stem
+            glossary = self.anchor_extractor.extract_glossary_from_document(full_text, document_id)
+            logger.info(f"Extracted {len(glossary)} glossary terms from {document_id}")
+
             filtered_chunks = self._filter_meaningful_chunks(chunks)
 
             document_info = {
@@ -85,7 +95,9 @@ class PDFProcessor:
                 "processing_date": datetime.now().isoformat(),
                 "document_hash": self._generate_document_hash(full_text),
                 "detected_language": self._detect_buddhist_language(full_text),
-                "estimated_tradition": self._estimate_tradition(full_text)
+                "estimated_tradition": self._estimate_tradition(full_text),
+                "glossary_terms_extracted": len(glossary),
+                "glossary_summary": self.anchor_extractor.get_glossary_summary()
             }
 
             logger.info(f"Processed {total_pages} pages into {len(filtered_chunks)} chunks")
@@ -117,10 +129,15 @@ class PDFProcessor:
                 chunks.extend(sub_chunks)
             else:
                 chunk_id = self._generate_chunk_id(section, page_num, i)
+                # Extract Buddhist anchors from this chunk using both taxonomy and glossaries
+                anchors = self.anchor_extractor.extract_anchors_with_glossary(section, chunk_id)
+
                 metadata = {
                     "section_type": section_type,
                     "position_in_page": i,
-                    "buddhist_terms_count": self._count_buddhist_terms(section)
+                    "buddhist_terms_count": self._count_buddhist_terms(section),
+                    "anchor_count": len(anchors),
+                    "anchor_categories": ", ".join(set(anchor.category for anchor in anchors))
                 }
 
                 chunk = BuddhistTextChunk(
@@ -129,7 +146,8 @@ class PDFProcessor:
                     chunk_id=chunk_id,
                     source_file=source_file,
                     chunk_type=section_type,
-                    metadata=metadata
+                    metadata=metadata,
+                    anchors=anchors
                 )
                 chunks.append(chunk)
 
@@ -195,10 +213,14 @@ class PDFProcessor:
             else:
                 if current_chunk:
                     chunk_id = self._generate_chunk_id(current_chunk, page_num, chunk_index)
+                    anchors = self.anchor_extractor.extract_anchors_with_glossary(current_chunk, chunk_id)
+
                     metadata = {
                         "section_type": section_type,
                         "is_continuation": chunk_index > 0,
-                        "buddhist_terms_count": self._count_buddhist_terms(current_chunk)
+                        "buddhist_terms_count": self._count_buddhist_terms(current_chunk),
+                        "anchor_count": len(anchors),
+                        "anchor_categories": ", ".join(set(anchor.category for anchor in anchors))
                     }
 
                     chunk = BuddhistTextChunk(
@@ -207,7 +229,8 @@ class PDFProcessor:
                         chunk_id=chunk_id,
                         source_file=source_file,
                         chunk_type=section_type,
-                        metadata=metadata
+                        metadata=metadata,
+                        anchors=anchors
                     )
                     chunks.append(chunk)
                     chunk_index += 1
@@ -216,10 +239,14 @@ class PDFProcessor:
 
         if current_chunk:
             chunk_id = self._generate_chunk_id(current_chunk, page_num, chunk_index)
+            anchors = self.anchor_extractor.extract_anchors_with_glossary(current_chunk, chunk_id)
+
             metadata = {
                 "section_type": section_type,
                 "is_continuation": chunk_index > 0,
-                "buddhist_terms_count": self._count_buddhist_terms(current_chunk)
+                "buddhist_terms_count": self._count_buddhist_terms(current_chunk),
+                "anchor_count": len(anchors),
+                "anchor_categories": ", ".join(set(anchor.category for anchor in anchors))
             }
 
             chunk = BuddhistTextChunk(
@@ -228,7 +255,8 @@ class PDFProcessor:
                 chunk_id=chunk_id,
                 source_file=source_file,
                 chunk_type=section_type,
-                metadata=metadata
+                metadata=metadata,
+                anchors=anchors
             )
             chunks.append(chunk)
 

@@ -2,10 +2,12 @@ const { app, BrowserWindow, Menu, ipcMain, dialog, shell } = require('electron')
 const path = require('path');
 const { spawn } = require('child_process');
 const axios = require('axios');
+const SetupManager = require('./setup-manager');
 
 let mainWindow;
 let pythonProcess;
 let backendReady = false;
+let setupManager;
 
 const isDev = process.env.NODE_ENV === 'development';
 
@@ -18,7 +20,10 @@ async function createWindow() {
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
-      enableRemoteModule: true
+      enableRemoteModule: true,
+      webSecurity: false,
+      allowRunningInsecureContent: true,
+      permissions: ['clipboard-read', 'clipboard-write']
     },
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     icon: path.join(__dirname, '../assets/icon.png')
@@ -169,7 +174,7 @@ async function startPythonBackend() {
 
 async function checkBackendHealth() {
   try {
-    const response = await axios.get('http://127.0.0.1:8000/health', { timeout: 5000 });
+    const response = await axios.get('http://127.0.0.1:8000/health', { timeout: 15000 });
     return response.data;
   } catch (error) {
     console.error('Backend health check failed:', error.message);
@@ -229,21 +234,38 @@ ipcMain.handle('show-info-dialog', async (event, title, content) => {
 });
 
 app.whenReady().then(async () => {
-  console.log('Electron app ready, starting Python backend...');
+  console.log('Buddhist RAG starting up...');
 
-  try {
-    await startPythonBackend();
-    console.log('Python backend started successfully');
-  } catch (error) {
-    console.error('Failed to start Python backend:', error);
-    dialog.showErrorBox(
-      'Startup Error',
-      'Failed to start the backend server. Please ensure Python and required dependencies are installed.\n\n' +
-      'Error: ' + error.message
-    );
-  }
+  setupManager = new SetupManager();
 
   await createWindow();
+
+  // Check if backend is already running
+  const existingBackend = await checkBackendHealth();
+
+  if (existingBackend && existingBackend.status === 'healthy') {
+    console.log('Backend already running - skipping setup and backend start');
+    backendReady = true;
+  } else {
+    // Run setup wizard
+    const setupComplete = await setupManager.runSetupWizard(mainWindow);
+
+    if (setupComplete) {
+      try {
+        await startPythonBackend();
+        console.log('Buddhist RAG ready!');
+      } catch (error) {
+        console.error('Failed to start backend:', error);
+        dialog.showErrorBox(
+          'Startup Error',
+          'Backend failed to start after setup. Please check the troubleshooting guide.\n\n' +
+          'Error: ' + error.message
+        );
+      }
+    } else {
+      console.log('Setup cancelled or failed');
+    }
+  }
 
   app.on('activate', async () => {
     if (BrowserWindow.getAllWindows().length === 0) {

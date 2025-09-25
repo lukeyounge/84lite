@@ -40,7 +40,7 @@ class VectorStore:
                 )
             )
             logger.info("Loaded existing collection 'buddhist_texts'")
-        except ValueError:
+        except (ValueError, Exception):
             self.collection = self.client.create_collection(
                 name="buddhist_texts",
                 embedding_function=chromadb.utils.embedding_functions.SentenceTransformerEmbeddingFunction(
@@ -83,12 +83,35 @@ class VectorStore:
             documents.append(chunk.content)
             ids.append(chunk.chunk_id)
 
+            # Serialize anchor data for storage
+            anchor_data = []
+            if chunk.anchors:
+                for anchor in chunk.anchors:
+                    anchor_dict = {
+                        "term": anchor.term,
+                        "category": anchor.category,
+                        "confidence": anchor.confidence,
+                        "definition": getattr(anchor, 'definition', ''),
+                        "source_type": getattr(anchor, 'source_type', ''),
+                        "chunk_id": anchor.chunk_id
+                    }
+                    anchor_data.append(anchor_dict)
+
+            # Serialize cross-links data
+            cross_links_data = {}
+            if chunk.cross_links:
+                cross_links_data = chunk.cross_links
+
             metadata = {
                 "source_file": chunk.source_file,
                 "page_num": chunk.page_num,
                 "chunk_type": chunk.chunk_type,
                 "word_count": chunk.word_count,
                 "added_date": datetime.now().isoformat(),
+                "anchors": json.dumps(anchor_data) if anchor_data else "",
+                "cross_links": json.dumps(cross_links_data) if cross_links_data else "",
+                "anchor_count": len(anchor_data),
+                "anchor_terms": ", ".join([anchor["term"] for anchor in anchor_data]) if anchor_data else "",
                 **chunk.metadata
             }
 
@@ -148,11 +171,15 @@ class VectorStore:
                     results["metadatas"][0],
                     results["distances"][0]
                 )):
+                    # Include deserialized anchor data in results
+                    anchors = self._deserialize_chunk_anchors(metadata)
+
                     search_results.append({
                         "content": doc,
                         "metadata": metadata,
                         "similarity_score": 1 - distance,  # Convert distance to similarity
-                        "rank": i + 1
+                        "rank": i + 1,
+                        "anchors": anchors
                     })
 
             logger.info(f"Found {len(search_results)} results")
@@ -334,3 +361,99 @@ class VectorStore:
         except Exception as e:
             logger.error(f"Error finding similar chunks: {str(e)}")
             raise
+
+    async def search_by_anchor(self, anchor_term: str, max_results: int = 5) -> List[Dict]:
+        """Search for chunks containing specific Buddhist anchor terms"""
+        try:
+            # Search for chunks that contain the anchor term
+            results = self.collection.query(
+                query_texts=[anchor_term],
+                n_results=max_results * 2,  # Get more to filter by actual anchor presence
+                include=["documents", "metadatas", "distances"]
+            )
+
+            search_results = []
+            if results["documents"] and results["documents"][0]:
+                for i, (doc, metadata, distance) in enumerate(zip(
+                    results["documents"][0],
+                    results["metadatas"][0],
+                    results["distances"][0]
+                )):
+                    # Parse anchor data to check if this term is actually an anchor
+                    anchors_json = metadata.get("anchors", "")
+                    if anchors_json:
+                        try:
+                            anchors = json.loads(anchors_json)
+                            # Check if the anchor term exists in this chunk's anchors
+                            has_anchor = any(
+                                anchor["term"].lower() == anchor_term.lower()
+                                for anchor in anchors
+                            )
+                            if has_anchor:
+                                search_results.append({
+                                    "content": doc,
+                                    "metadata": metadata,
+                                    "similarity_score": 1 - distance,
+                                    "rank": len(search_results) + 1,
+                                    "anchors": anchors
+                                })
+                        except json.JSONDecodeError:
+                            continue
+
+            logger.info(f"Found {len(search_results)} chunks with anchor '{anchor_term}'")
+            return search_results[:max_results]
+
+        except Exception as e:
+            logger.error(f"Error searching by anchor: {str(e)}")
+            raise
+
+    async def get_anchor_cross_references(self, anchor_term: str) -> List[Dict]:
+        """Get cross-referenced terms for a given anchor"""
+        try:
+            # Find chunks containing this anchor
+            chunks_with_anchor = await self.search_by_anchor(anchor_term, max_results=50)
+
+            cross_refs = set()
+            for chunk in chunks_with_anchor:
+                cross_links_json = chunk["metadata"].get("cross_links", "")
+                if cross_links_json:
+                    try:
+                        cross_links = json.loads(cross_links_json)
+                        if anchor_term in cross_links:
+                            cross_refs.update(cross_links[anchor_term])
+                    except json.JSONDecodeError:
+                        continue
+
+            # Get information about cross-referenced terms
+            cross_ref_info = []
+            for ref_term in cross_refs:
+                ref_chunks = await self.search_by_anchor(ref_term, max_results=1)
+                if ref_chunks:
+                    anchor_data = ref_chunks[0].get("anchors", [])
+                    anchor_info = next(
+                        (a for a in anchor_data if a["term"].lower() == ref_term.lower()),
+                        None
+                    )
+                    if anchor_info:
+                        cross_ref_info.append({
+                            "term": ref_term,
+                            "category": anchor_info.get("category", ""),
+                            "definition": anchor_info.get("definition", ""),
+                            "confidence": anchor_info.get("confidence", 0)
+                        })
+
+            return cross_ref_info
+
+        except Exception as e:
+            logger.error(f"Error getting cross references: {str(e)}")
+            raise
+
+    def _deserialize_chunk_anchors(self, metadata: Dict) -> List[Dict]:
+        """Helper method to deserialize anchor data from metadata"""
+        anchors_json = metadata.get("anchors", "")
+        if anchors_json:
+            try:
+                return json.loads(anchors_json)
+            except json.JSONDecodeError:
+                return []
+        return []

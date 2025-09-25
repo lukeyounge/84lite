@@ -4,10 +4,10 @@
   "description": "A desktop RAG application for Buddhist PDF texts",
   "main": "src/main.js",
   "scripts": {
-    "start": "electron .",
-    "dev": "electron . --dev",
-    "build": "electron-builder",
-    "build-all": "electron-builder --win --mac --linux",
+    "start": "npx electron .",
+    "dev": "npx electron . --dev",
+    "build": "npx electron-builder",
+    "build-all": "npx electron-builder --win --mac --linux",
     "dist": "npm run build-all"
   },
   "build": {

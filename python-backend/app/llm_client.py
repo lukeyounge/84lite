@@ -7,7 +7,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 import time
 
 class LLMClient:
-    def __init__(self, model_name: str = "qwen2.5:7b"):
+    def __init__(self, model_name: str = "qwen2.5:14b"):
         self.model_name = model_name
         self.client = ollama.AsyncClient()
         self.system_prompt = self._create_buddhist_system_prompt()
@@ -39,13 +39,13 @@ Remember: Your goal is to facilitate genuine understanding and respectful engage
     async def health_check(self) -> Dict:
         try:
             models = await self.client.list()
-            model_available = any(model["name"] == self.model_name for model in models["models"])
+            model_available = any(model.model == self.model_name for model in models.models)
 
             if not model_available:
                 return {
                     "status": "unhealthy",
                     "error": f"Model {self.model_name} not available",
-                    "available_models": [model["name"] for model in models["models"]]
+                    "available_models": [model.model for model in models.models]
                 }
 
             test_response = await self._test_generation()
@@ -282,13 +282,13 @@ Keep the summary concise but informative."""
         try:
             models = await self.client.list()
 
-            for model in models["models"]:
-                if model["name"] == self.model_name:
+            for model in models.models:
+                if model.model == self.model_name:
                     return {
-                        "name": model["name"],
-                        "size": model.get("size", "Unknown"),
-                        "modified": model.get("modified_at", "Unknown"),
-                        "details": model.get("details", {})
+                        "name": model.model,
+                        "size": getattr(model, "size", "Unknown"),
+                        "modified": getattr(model, "modified_at", "Unknown"),
+                        "details": getattr(model, "details", {})
                     }
 
             return {"error": f"Model {self.model_name} not found"}

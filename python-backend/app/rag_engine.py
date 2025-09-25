@@ -9,12 +9,16 @@ from datetime import datetime
 from .pdf_processor import PDFProcessor
 from .vector_store import VectorStore
 from .llm_client import LLMClient
+from .frontier_llm_client import FrontierLLMClient
+from .config import get_config, ModelProvider
 
 class RAGEngine:
     def __init__(self):
         self.pdf_processor = PDFProcessor()
         self.vector_store = VectorStore()
-        self.llm_client = LLMClient()
+        self.llm_client = LLMClient()  # Local Ollama client (fallback)
+        self.frontier_client = FrontierLLMClient()  # Frontier models client
+        self.config = get_config()
         self.initialized = False
 
     async def initialize(self):
@@ -23,7 +27,19 @@ class RAGEngine:
 
         logger.info("Initializing RAG Engine...")
 
+        # Initialize vector store
         await self.vector_store.initialize()
+
+        # Initialize frontier client if using API providers
+        if self.config.model_provider != ModelProvider.LOCAL:
+            try:
+                await self.frontier_client.initialize()
+                logger.info(f"Initialized frontier client: {self.config.model_provider.value}")
+            except Exception as e:
+                logger.warning(f"Failed to initialize frontier client: {str(e)}")
+                if not self.config.enable_fallback:
+                    raise
+
         logger.info("RAG Engine initialized successfully")
         self.initialized = True
 
@@ -81,10 +97,9 @@ class RAGEngine:
             if filter_by_source:
                 filter_metadata = {"source_file": filter_by_source}
 
-            search_results = await self.vector_store.hybrid_search(
-                query=question,
-                max_results=max_results,
-                boost_buddhist_terms=True
+            # Try anchor-aware search first
+            search_results = await self._anchor_enhanced_search(
+                question, max_results, filter_metadata
             )
 
             if not search_results:
@@ -97,10 +112,8 @@ class RAGEngine:
 
             enhanced_sources = await self._enhance_sources(search_results, include_similar)
 
-            llm_response = await self.llm_client.generate_response(
-                question=question,
-                context_passages=enhanced_sources
-            )
+            # Try frontier model first, fallback to local if needed
+            llm_response = await self._generate_with_fallback(question, enhanced_sources)
 
             processing_time = time.time() - start_time
 
@@ -144,6 +157,55 @@ class RAGEngine:
 
         return enhanced_sources
 
+    async def _anchor_enhanced_search(self, question: str, max_results: int,
+                                     filter_metadata: Optional[Dict] = None) -> List[Dict]:
+        """Enhanced search that leverages Buddhist anchors for better results"""
+
+        # Extract potential Buddhist terms from the question
+        question_words = question.lower().split()
+        buddhist_indicators = [
+            "dharma", "dhamma", "buddha", "meditation", "mindfulness", "compassion",
+            "wisdom", "suffering", "impermanence", "karma", "nirvana", "samsara",
+            "enlightenment", "awakening", "bodhisattva", "sutta", "teaching"
+        ]
+
+        detected_terms = [word for word in question_words if word in buddhist_indicators]
+
+        # Start with hybrid search (our existing method)
+        search_results = await self.vector_store.hybrid_search(
+            query=question,
+            max_results=max_results,
+            boost_buddhist_terms=True
+        )
+
+        # If we detected Buddhist terms, try anchor-specific searches to supplement
+        if detected_terms:
+            for term in detected_terms[:2]:  # Limit to avoid too many searches
+                try:
+                    anchor_results = await self.vector_store.search_by_anchor(
+                        term, max_results=2
+                    )
+                    # Add anchor results but avoid duplicates
+                    for anchor_result in anchor_results:
+                        chunk_id = anchor_result["metadata"].get("chunk_id")
+                        if not any(r["metadata"].get("chunk_id") == chunk_id for r in search_results):
+                            # Boost similarity score for anchor matches
+                            anchor_result["similarity_score"] *= 1.2
+                            search_results.append(anchor_result)
+                except Exception as e:
+                    logger.warning(f"Could not search by anchor '{term}': {str(e)}")
+
+        # Re-sort by similarity score and limit results
+        search_results.sort(key=lambda x: x["similarity_score"], reverse=True)
+        final_results = search_results[:max_results]
+
+        # Update ranks
+        for i, result in enumerate(final_results):
+            result["rank"] = i + 1
+
+        logger.info(f"Anchor-enhanced search returned {len(final_results)} results")
+        return final_results
+
     def _format_sources_for_response(self, sources: List[Dict]) -> List[Dict]:
         formatted_sources = []
 
@@ -161,12 +223,26 @@ class RAGEngine:
                 "citation": f"{metadata.get('source_file', 'Unknown source')}, page {metadata.get('page_num', '?')}"
             }
 
+            # Include anchor information if available
+            if source.get("anchors"):
+                formatted_anchors = []
+                for anchor in source["anchors"]:
+                    formatted_anchor = {
+                        "term": anchor.get("term", ""),
+                        "category": anchor.get("category", ""),
+                        "confidence": round(anchor.get("confidence", 0), 2),
+                        "definition": anchor.get("definition", "")[:200] + "..." if len(anchor.get("definition", "")) > 200 else anchor.get("definition", "")
+                    }
+                    formatted_anchors.append(formatted_anchor)
+                formatted_source["buddhist_anchors"] = formatted_anchors
+
             if source.get("similar_passages"):
                 formatted_source["similar_passages"] = [
                     {
                         "content": sp["content"][:200] + "..." if len(sp["content"]) > 200 else sp["content"],
                         "source_file": sp["metadata"].get("source_file", "Unknown"),
-                        "page_number": sp["metadata"].get("page_num", "Unknown")
+                        "page_number": sp["metadata"].get("page_num", "Unknown"),
+                        "anchors": sp.get("anchors", [])[:3]  # Include top 3 anchors from similar passages
                     }
                     for sp in source["similar_passages"]
                 ]
@@ -392,3 +468,95 @@ class RAGEngine:
         except Exception as e:
             logger.warning(f"Could not get conversation context: {str(e)}")
             return []
+
+    async def _generate_with_fallback(self, question: str, context_passages: List[Dict]) -> Dict:
+        """Generate response using frontier model with fallback to local model"""
+
+        # If using local model provider, use local client directly
+        if self.config.model_provider == ModelProvider.LOCAL:
+            return await self.llm_client.generate_response(
+                question=question,
+                context_passages=context_passages
+            )
+
+        # Try frontier model first
+        if self.frontier_client.is_available():
+            try:
+                logger.info(f"Using frontier model: {self.config.model_provider.value}")
+                return await self.frontier_client.generate_response(
+                    question=question,
+                    context_passages=context_passages
+                )
+            except Exception as e:
+                logger.warning(f"Frontier model failed: {str(e)}")
+
+                # If fallback is disabled, re-raise the error
+                if not self.config.enable_fallback:
+                    raise
+
+        # Fallback to local model
+        logger.info("Falling back to local model")
+        response = await self.llm_client.generate_response(
+            question=question,
+            context_passages=context_passages
+        )
+
+        # Add fallback indicator to response
+        response["fallback_used"] = True
+        response["primary_provider_failed"] = self.config.model_provider.value if self.config.model_provider != ModelProvider.LOCAL else None
+
+        return response
+
+    async def get_model_status(self) -> Dict:
+        """Get status of all available models"""
+        status = {
+            "current_provider": self.config.model_provider.value,
+            "local_model": {},
+            "frontier_model": {},
+            "fallback_enabled": self.config.enable_fallback,
+            "privacy_summary": self.config.get_privacy_summary()
+        }
+
+        # Check local model
+        try:
+            status["local_model"] = await self.llm_client.health_check()
+        except Exception as e:
+            status["local_model"] = {"status": "unhealthy", "error": str(e)}
+
+        # Check frontier model if available
+        if self.frontier_client.is_available():
+            try:
+                frontier_status = await self.frontier_client.health_check()
+                frontier_status["usage_summary"] = self.frontier_client.get_usage_summary()
+                status["frontier_model"] = frontier_status
+            except Exception as e:
+                status["frontier_model"] = {"status": "unhealthy", "error": str(e)}
+        else:
+            status["frontier_model"] = {"status": "unavailable", "reason": "No API key configured"}
+
+        return status
+
+    async def update_model_config(self, provider: str, **kwargs) -> bool:
+        """Update model configuration and reinitialize if necessary"""
+        try:
+            old_provider = self.config.model_provider
+
+            # Update configuration
+            success = self.config.update_provider(provider, **kwargs)
+            if not success:
+                return False
+
+            # Reinitialize if provider changed
+            if old_provider != self.config.model_provider:
+                logger.info(f"Provider changed from {old_provider.value} to {provider}")
+
+                if self.config.model_provider != ModelProvider.LOCAL:
+                    # Reinitialize frontier client
+                    self.frontier_client = FrontierLLMClient()
+                    await self.frontier_client.initialize()
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to update model config: {str(e)}")
+            return False

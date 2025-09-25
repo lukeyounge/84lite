@@ -21,6 +21,9 @@
                         <span class="status-dot" id="status-dot"></span>
                         <span id="status-text">Initializing...</span>
                     </div>
+                    <button id="settings-btn" class="settings-btn" title="Model Settings">
+                        <span class="settings-icon">⚙️</span>
+                    </button>
                 </div>
             </div>
         </header>
@@ -116,7 +119,7 @@
                             </button>
                         </div>
                         <div class="input-footer">
-                            <span class="model-info" id="model-info">Powered by Qwen 2.5 7B</span>
+                            <span class="model-info" id="model-info">Powered by Qwen 2.5 14B</span>
                             <span class="shortcut-hint">Press Enter to send, Shift+Enter for new line</span>
                         </div>
                     </div>
@@ -133,6 +136,21 @@
                 </div>
                 <div class="modal-body" id="modal-body">
                     <!-- Content will be populated by JavaScript -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Settings Modal -->
+        <div id="settings-modal" class="modal">
+            <div class="modal-content">
+                <span class="close" id="settings-modal-close">&times;</span>
+                <div class="modal-header">
+                    <h2>Model Settings</h2>
+                </div>
+                <div class="modal-body">
+                    <div id="settings-content">
+                        <!-- Settings content will be populated by JavaScript -->
+                    </div>
                 </div>
             </div>
         </div>

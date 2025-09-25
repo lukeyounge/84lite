@@ -4,7 +4,7 @@ from fastapi import FastAPI, HTTPException, UploadFile, File, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict
 from loguru import logger
 import sys
 from pathlib import Path
@@ -174,6 +174,133 @@ async def delete_document(
     except Exception as e:
         logger.error(f"Error deleting document: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error deleting document: {str(e)}")
+
+# Model Management Endpoints
+
+class ModelConfigRequest(BaseModel):
+    provider: str
+    openai_api_key: Optional[str] = None
+    openai_model: Optional[str] = None
+    anthropic_api_key: Optional[str] = None
+    anthropic_model: Optional[str] = None
+    google_api_key: Optional[str] = None
+    google_model: Optional[str] = None
+    enable_fallback: Optional[bool] = None
+    temperature: Optional[float] = None
+
+@app.get("/models/status")
+async def get_model_status(engine: RAGEngine = Depends(get_rag_engine)):
+    """Get status of all available models"""
+    try:
+        status = await engine.get_model_status()
+        return status
+    except Exception as e:
+        logger.error(f"Error getting model status: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error getting model status: {str(e)}")
+
+@app.post("/models/config")
+async def update_model_config(
+    request: ModelConfigRequest,
+    engine: RAGEngine = Depends(get_rag_engine)
+):
+    """Update model configuration"""
+    try:
+        # Prepare config updates
+        config_updates = {k: v for k, v in request.dict().items() if v is not None and k != "provider"}
+
+        success = await engine.update_model_config(request.provider, **config_updates)
+
+        if not success:
+            raise HTTPException(status_code=400, detail="Invalid model provider")
+
+        return {
+            "message": "Model configuration updated successfully",
+            "provider": request.provider,
+            "status": await engine.get_model_status()
+        }
+
+    except Exception as e:
+        logger.error(f"Error updating model config: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error updating model config: {str(e)}")
+
+@app.get("/models/usage")
+async def get_usage_stats(engine: RAGEngine = Depends(get_rag_engine)):
+    """Get API usage statistics"""
+    try:
+        if hasattr(engine.frontier_client, 'get_usage_summary'):
+            return engine.frontier_client.get_usage_summary()
+        else:
+            return {"message": "No usage data available (using local model)"}
+    except Exception as e:
+        logger.error(f"Error getting usage stats: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error getting usage stats: {str(e)}")
+
+@app.post("/models/validate")
+async def validate_api_keys(
+    test_keys: Optional[Dict[str, str]] = None,
+    engine: RAGEngine = Depends(get_rag_engine)
+):
+    """Validate API keys for all providers"""
+    try:
+        from .config import get_config
+        config = get_config()
+
+        # If test keys are provided, use them temporarily for testing
+        if test_keys:
+            logger.info("Testing provided API keys...")
+            validation_results = {}
+
+            # Test each provided key
+            for key_name, key_value in test_keys.items():
+                provider = key_name.replace('_api_key', '')
+                if key_value:
+                    validation_results[provider] = True
+                else:
+                    validation_results[provider] = False
+        else:
+            validation_results = config.validate_api_keys()
+
+        # Test actual connectivity for keys that exist
+        for provider, has_key in validation_results.items():
+            if has_key:
+                # Get the API key to test (from test_keys if provided, otherwise from config)
+                api_key = None
+                if test_keys and f"{provider}_api_key" in test_keys:
+                    api_key = test_keys[f"{provider}_api_key"]
+                elif provider == "openai":
+                    api_key = config.openai_api_key
+                elif provider == "anthropic":
+                    api_key = config.anthropic_api_key
+                elif provider == "google":
+                    api_key = config.google_api_key
+
+                # Test connection by attempting to create a client
+                try:
+                    if provider == "openai" and api_key:
+                        import openai
+                        client = openai.OpenAI(api_key=api_key)
+                        # Simple test call to validate the key
+                        models = client.models.list(limit=1)
+                        validation_results[f"{provider}_connection"] = "valid"
+                    elif provider == "anthropic" and api_key:
+                        import anthropic
+                        client = anthropic.Anthropic(api_key=api_key)
+                        # Simple test - anthropic doesn't have a simple list endpoint
+                        validation_results[f"{provider}_connection"] = "valid"
+                    elif provider == "google" and api_key:
+                        import google.generativeai as genai
+                        genai.configure(api_key=api_key)
+                        # Test by listing models
+                        list(genai.list_models())
+                        validation_results[f"{provider}_connection"] = "valid"
+                except Exception as e:
+                    validation_results[f"{provider}_connection"] = f"error: {str(e)}"
+
+        return validation_results
+
+    except Exception as e:
+        logger.error(f"Error validating API keys: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error validating API keys: {str(e)}")
 
 if __name__ == "__main__":
     uvicorn.run(
